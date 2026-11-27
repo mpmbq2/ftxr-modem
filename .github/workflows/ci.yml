@@ -1,0 +1,198 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-audit:
+    name: Lint, Rustdoc & GPLv3 Compliance Audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install lint helpers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Build documentation without warnings
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps --locked
+
+      - name: Run cargo-deny license, ban & source checks
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features --locked
+
+      - name: Run shellcheck and GPLv3 compliance audit
+        run: |
+          bash -n scripts/verify-compliance.sh
+          shellcheck -x scripts/verify-compliance.sh
+          ./scripts/verify-compliance.sh
+
+  test-matrix:
+    name: Test Matrix (${{ matrix.slug }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - slug: linux-x86_64
+            runner: ubuntu-24.04
+          - slug: linux-aarch64
+            runner: ubuntu-24.04-arm
+          - slug: darwin-aarch64
+            runner: macos-15
+          - slug: darwin-x86_64
+            runner: macos-15-intel
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run workspace test suite
+        run: cargo test --workspace --locked
+
+      - name: Build release binary
+        run: cargo build --release --locked --bin ftxr-modem
+
+      - name: Smoke test release binary CLI & warm IPC worker
+        run: |
+          BIN="target/release/ftxr-modem"
+          "$BIN" --version
+          "$BIN" --version --json
+          "$BIN" --license >/dev/null
+          "$BIN" license >/dev/null
+          "$BIN" decode --mode ft8 --depth 3 tests/fixtures/210703_133430.wav
+          "$BIN" decode --mode ft4 --depth 3 tests/fixtures/000000_000002.wav
+          python3 - "$BIN" <<'PY'
+          import json, struct, subprocess, sys
+
+          proc = subprocess.Popen(
+              [sys.argv[1], "--worker"],
+              stdin=subprocess.PIPE,
+              stdout=subprocess.PIPE,
+              stderr=subprocess.PIPE,
+          )
+          def send(obj):
+              jb = json.dumps(obj).encode()
+              proc.stdin.write(struct.pack("<4sHHII", b"FTXR", 1, 0, len(jb), 0) + jb)
+              proc.stdin.flush()
+          def recv():
+              hdr = proc.stdout.read(16)
+              assert len(hdr) == 16, f"short header: {hdr!r}"
+              magic, ver, flags, jlen, plen = struct.unpack("<4sHHII", hdr)
+              assert magic == b"FTXR" and ver == 1
+              jb = proc.stdout.read(jlen)
+              pb = proc.stdout.read(plen)
+              return json.loads(jb), pb
+
+          send({"op": "hello", "id": "ci-1", "protocol_version": 1})
+          ready, _ = recv()
+          assert ready["op"] == "ready"
+          send({"op": "shutdown", "id": "ci-2"})
+          ok, _ = recv()
+          assert ok["op"] == "ok"
+          proc.stdin.close()
+          rc = proc.wait(timeout=10)
+          assert rc == 0, f"unexpected worker exit code {rc}"
+          print("CI worker smoke OK:", ready["version"], "threads=", ready["threads"])
+          PY
+
+  msrv:
+    name: MSRV (Rust 1.85.0)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.85.0
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.85.0"
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check workspace on MSRV
+        run: cargo check --workspace --all-targets --locked
+
+      - name: Run workspace tests on MSRV
+        run: cargo test --workspace --locked
+
+  clean-room-linux:
+    name: Clean-Room Rust-Only Container (Zero WSJT-X / Fortran / FFTW)
+    runs-on: ubuntu-24.04
+    container:
+      image: rust:1.85-slim
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Assert clean-room environment has zero WSJT-X/Fortran/FFTW/Qt tools
+        run: |
+          for cmd in jt9 ft8code ft4code gfortran rigctl rigctld; do
+            if command -v "$cmd" >/dev/null 2>&1; then
+              echo "::error::Unexpected tool $cmd found in clean-room container"
+              exit 1
+            fi
+          done
+          if dpkg -l | grep -qiE 'fftw|gfortran|libqt|hamlib|wsjtx'; then
+            echo "::error::Unexpected WSJT-X/FFTW/Qt/Hamlib package in clean-room container"
+            exit 1
+          fi
+
+      - name: Run full workspace tests without external tools
+        run: cargo test --workspace --locked
+
+      - name: Build and cargo-install standalone ftxr-modem binary
+        run: |
+          cargo build --release --locked --bin ftxr-modem
+          cargo install --locked --path crates/ftxr-modem --root /tmp/ftxr-clean-install
+          /tmp/ftxr-clean-install/bin/ftxr-modem --version
+          /tmp/ftxr-clean-install/bin/ftxr-modem --license >/dev/null
+          /tmp/ftxr-clean-install/bin/ftxr-modem decode --mode ft8 -d 3 tests/fixtures/191111_110200.wav
+          /tmp/ftxr-clean-install/bin/ftxr-modem decode --mode ft4 -d 3 tests/fixtures/000000_000002.wav

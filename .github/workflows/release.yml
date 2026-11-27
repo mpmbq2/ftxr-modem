@@ -1,0 +1,372 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag ref to package (must match Cargo.toml version, e.g. v0.1.0)"
+        required: true
+        default: "v0.1.0"
+      dry_run:
+        description: "Verify build, tarballs, and SHA256SUMS without creating a GitHub Release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare & Verify Tag Parity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+      is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
+      dry_run: ${{ steps.meta.outputs.dry_run }}
+      checkout_ref: ${{ steps.meta.outputs.checkout_ref }}
+
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && (inputs.dry_run && github.ref || inputs.tag) || github.ref }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate tag format and Cargo.toml parity
+        id: meta
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG="${{ inputs.tag }}"
+            DRY_RUN="${{ inputs.dry_run }}"
+            if [[ "$DRY_RUN" == "true" ]]; then
+              CHECKOUT_REF="${GITHUB_REF}"
+            else
+              CHECKOUT_REF="refs/tags/${TAG}"
+            fi
+          else
+            TAG="${GITHUB_REF_NAME}"
+            DRY_RUN="false"
+            CHECKOUT_REF="refs/tags/${TAG}"
+          fi
+
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid release tag '$TAG' (expected vX.Y.Z or vX.Y.Z-suffix)"
+            exit 1
+          fi
+
+          VERSION="${TAG#v}"
+          IS_PRERELEASE="false"
+          if [[ "$VERSION" == *-* ]]; then
+            IS_PRERELEASE="true"
+          fi
+
+          CARGO_VERSIONS="$(cargo metadata --no-deps --format-version 1 --locked | python3 -c '
+          import json, sys
+          meta = json.load(sys.stdin)
+          pkgs = {p["name"]: p["version"] for p in meta["packages"] if p["id"] in meta["workspace_members"]}
+          assert pkgs.get("ftxr-core") == pkgs.get("ftxr-modem"), f"crate mismatch: {pkgs}"
+          print(pkgs["ftxr-modem"])
+          ')"
+
+          if [[ "v${CARGO_VERSIONS}" != "${TAG}" ]]; then
+            echo "::error::Tag ${TAG} does not match Cargo.toml workspace version ${CARGO_VERSIONS}"
+            exit 1
+          fi
+
+          {
+            echo "tag=${TAG}"
+            echo "version=${CARGO_VERSIONS}"
+            echo "is_prerelease=${IS_PRERELEASE}"
+            echo "dry_run=${DRY_RUN}"
+            echo "checkout_ref=${CHECKOUT_REF}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run cargo-deny audit
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features --locked
+
+      - name: Run GPLv3 & compliance audit
+        run: ./scripts/verify-compliance.sh
+
+  build:
+    name: Build Release (${{ matrix.os_slug }}-${{ matrix.arch_slug }})
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            rust_target: x86_64-unknown-linux-musl
+            os_slug: linux
+            arch_slug: x86_64
+            rustflags: "-C target-feature=+crt-static"
+            macosx_target: ""
+          - runner: ubuntu-24.04-arm
+            rust_target: aarch64-unknown-linux-musl
+            os_slug: linux
+            arch_slug: aarch64
+            rustflags: "-C target-feature=+crt-static"
+            macosx_target: ""
+          - runner: macos-15
+            rust_target: aarch64-apple-darwin
+            os_slug: darwin
+            arch_slug: aarch64
+            rustflags: ""
+            macosx_target: "11.0"
+          - runner: macos-15-intel
+            rust_target: x86_64-apple-darwin
+            os_slug: darwin
+            arch_slug: x86_64
+            rustflags: ""
+            macosx_target: "11.0"
+
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
+
+      - name: Install Rust toolchain & target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.rust_target }}
+
+      - name: Build static/portable release binary
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macosx_target }}
+        run: cargo build --release --locked --target "${{ matrix.rust_target }}" --bin ftxr-modem
+
+      - name: Verify binary architecture & library linkage
+        run: |
+          BIN="target/${{ matrix.rust_target }}/release/ftxr-modem"
+          test -x "$BIN"
+          if [[ "${{ matrix.os_slug }}" == "linux" ]]; then
+            FILE_DESC="$(file -b "$BIN")"
+            echo "Binary file(1): $FILE_DESC"
+            if [[ "${{ matrix.arch_slug }}" == "x86_64" ]]; then
+              echo "$FILE_DESC" | grep -q "ELF 64-bit LSB.*x86-64"
+            else
+              echo "$FILE_DESC" | grep -q "ELF 64-bit LSB.*ARM aarch64"
+            fi
+            if ldd "$BIN" 2>&1 | grep -qiE 'fftw|gfortran|libqt|hamlib'; then
+              echo "::error::Forbidden shared library detected in $BIN"
+              ldd "$BIN"
+              exit 1
+            fi
+            if ! ldd "$BIN" 2>&1 | grep -qiE 'not a dynamic executable|statically linked'; then
+              echo "::error::Expected static musl executable, got:"
+              ldd "$BIN"
+              exit 1
+            fi
+          else
+            ARCHS="$(lipo -archs "$BIN")"
+            echo "macOS archs: $ARCHS"
+            if [[ "${{ matrix.arch_slug }}" == "aarch64" ]]; then
+              test "$ARCHS" = "arm64"
+            else
+              test "$ARCHS" = "x86_64"
+            fi
+            OTOOL_OUT="$(otool -L "$BIN")"
+            echo "$OTOOL_OUT"
+            if echo "$OTOOL_OUT" | grep -qE '/opt/homebrew|/usr/local|fftw|gfortran|Qt|hamlib'; then
+              echo "::error::Non-system dylib detected in $BIN"
+              exit 1
+            fi
+            vtool -show-build "$BIN"
+          fi
+
+      - name: Run native execution smoke gate
+        run: |
+          BIN="target/${{ matrix.rust_target }}/release/ftxr-modem"
+          VER="$("$BIN" --version)"
+          echo "Reported version: $VER"
+          test "$VER" = "ftxr-modem ${{ needs.prepare.outputs.version }} (ipc-v1)"
+          LIC="$("$BIN" --license)"
+          echo "$LIC" | grep -q "GPL-3.0-only"
+          echo "$LIC" | grep -q "WSJT-X"
+          FT8_OUT="$("$BIN" decode --mode ft8 --depth 3 tests/fixtures/210703_133430.wav)"
+          echo "$FT8_OUT" | grep -q "W1FC F5BZB -08"
+          FT4_OUT="$("$BIN" decode --mode ft4 --depth 3 tests/fixtures/000000_000002.wav)"
+          echo "$FT4_OUT" | grep -q "KB0VHA KA1YQC R 539 MA"
+          python3 - "$BIN" <<'PY'
+          import json, struct, subprocess, sys
+
+          proc = subprocess.Popen(
+              [sys.argv[1], "--worker"],
+              stdin=subprocess.PIPE,
+              stdout=subprocess.PIPE,
+              stderr=subprocess.PIPE,
+          )
+          def send(obj):
+              jb = json.dumps(obj).encode()
+              proc.stdin.write(struct.pack("<4sHHII", b"FTXR", 1, 0, len(jb), 0) + jb)
+              proc.stdin.flush()
+          def recv():
+              hdr = proc.stdout.read(16)
+              assert len(hdr) == 16
+              magic, ver, _, jlen, plen = struct.unpack("<4sHHII", hdr)
+              assert magic == b"FTXR" and ver == 1
+              return json.loads(proc.stdout.read(jlen)), proc.stdout.read(plen)
+
+          send({"op": "hello", "id": "rel-1", "protocol_version": 1})
+          ready, _ = recv()
+          assert ready["op"] == "ready"
+          send({"op": "shutdown", "id": "rel-2"})
+          ok, _ = recv()
+          assert ok["op"] == "ok"
+          proc.stdin.close()
+          assert proc.wait(timeout=10) == 0
+          PY
+
+      - name: Assemble flat release tarball
+        run: |
+          TAG="${{ needs.prepare.outputs.tag }}"
+          TARBALL="ftxr-modem-${TAG}-${{ matrix.os_slug }}-${{ matrix.arch_slug }}.tar.gz"
+          STAGE_DIR="$(mktemp -d)"
+          install -m 0755 "target/${{ matrix.rust_target }}/release/ftxr-modem" "${STAGE_DIR}/ftxr-modem"
+          install -m 0644 LICENSE NOTICE README.md "${STAGE_DIR}/"
+          mkdir -p dist
+          tar -czf "dist/${TARBALL}" -C "${STAGE_DIR}" ftxr-modem LICENSE NOTICE README.md
+          rm -rf "${STAGE_DIR}"
+          LAYOUT="$(tar -tzf "dist/${TARBALL}" | LC_ALL=C sort | tr '\n' ' ')"
+          echo "Tarball layout: ${LAYOUT}"
+          test "${LAYOUT}" = "LICENSE NOTICE README.md ftxr-modem "
+
+      - name: Upload platform release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ftxr-modem-${{ matrix.os_slug }}-${{ matrix.arch_slug }}
+          path: dist/ftxr-modem-*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Verify All Platforms, Checksums & Publish Release
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
+          fetch-depth: 0
+
+      - name: Download all platform tarballs
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Enforce all-platforms-ready gate
+        run: |
+          TAG="${{ needs.prepare.outputs.tag }}"
+          for slug in linux-x86_64 linux-aarch64 darwin-x86_64 darwin-aarch64; do
+            TARBALL="dist/ftxr-modem-${TAG}-${slug}.tar.gz"
+            if [[ ! -f "$TARBALL" ]]; then
+              echo "::error::Missing platform tarball $TARBALL"
+              exit 1
+            fi
+            SIZE="$(stat --printf '%s' "$TARBALL")"
+            echo "Found $TARBALL (${SIZE} bytes)"
+            if (( SIZE <= 512000 )); then
+              echo "::error::Tarball $TARBALL unexpectedly small (${SIZE} bytes)"
+              exit 1
+            fi
+          done
+
+      - name: Create GPLv3 §6(d) Corresponding Source archive
+        run: |
+          TAG="${{ needs.prepare.outputs.tag }}"
+          SRC_REF="HEAD"
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            SRC_REF="${TAG}"
+          fi
+          git archive \
+            --format=tar.gz \
+            --prefix="ftxr-modem-${TAG}/" \
+            -o "dist/ftxr-modem-${TAG}-src.tar.gz" \
+            "${SRC_REF}"
+
+      - name: Generate and verify SHA256SUMS (digi-dx install.sh contract)
+        run: |
+          cd dist
+          LC_ALL=C sha256sum ftxr-modem-*.tar.gz | LC_ALL=C sort -k2 > SHA256SUMS
+          cat SHA256SUMS
+          while IFS= read -r line; do
+            if [[ ! "$line" =~ ^[0-9a-f]{64}\ \ ftxr-modem-.*\.tar\.gz$ ]]; then
+              echo "::error::Invalid SHA256SUMS line format: $line"
+              exit 1
+            fi
+          done < SHA256SUMS
+          for f in ftxr-modem-*.tar.gz; do
+            grep "  ${f}\$" SHA256SUMS | sha256sum -c -
+          done
+
+      - name: Create GitHub Release
+        if: needs.prepare.outputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ needs.prepare.outputs.tag }}"
+          NOTES_FILE="$(mktemp)"
+          sed "s/__TAG__/${TAG}/g" <<'EOF' > "$NOTES_FILE"
+          # ftxr-modem __TAG__
+
+          Pure-Rust **FT8 & FT4** standalone CLI and persistent warm stdio IPC v1 worker binary (`GPL-3.0-only`).
+          Zero C, Fortran, FFTW, Qt, or Hamlib dependencies.
+
+          ## Artifacts & Verification
+
+          ```bash
+          # Verify downloaded platform tarball against SHA256SUMS (Linux: sha256sum; macOS: shasum -a 256)
+          grep "  ftxr-modem-__TAG__-<os>-<arch>.tar.gz$" SHA256SUMS | sha256sum -c -
+          ```
+
+          Or install from tagged source:
+
+          ```bash
+          cargo install --locked --git https://github.com/mpmbq2/ftxr-modem --tag __TAG__ ftxr-modem
+          ```
+
+          ## GPLv3 Corresponding Source & Attribution
+
+          - **Corresponding Source:** Attached as `ftxr-modem-__TAG__-src.tar.gz` and tagged at https://github.com/mpmbq2/ftxr-modem/tree/__TAG__
+          - **Upstream Attribution:** Based on WSJT-X classic FT8/FT4 algorithms (Copyright (C) 2001–2026 Joe Taylor, K1JT, and the WSJT Development Group).
+          - **Trademark Notice:** WSJT, WSJT-X, MAP65, and QMAP are trademarks of the WSJT Development Team. `ftxr-modem` is an independent project and is neither affiliated with nor endorsed by the WSJT Development Team.
+          EOF
+
+          PRERELEASE_FLAG=()
+          if [[ "${{ needs.prepare.outputs.is_prerelease }}" == "true" ]]; then
+            PRERELEASE_FLAG=(--prerelease)
+          fi
+
+          gh release create "${TAG}" \
+            "${PRERELEASE_FLAG[@]}" \
+            --title "ftxr-modem ${TAG}" \
+            --notes-file "$NOTES_FILE" \
+            dist/ftxr-modem-*.tar.gz \
+            dist/SHA256SUMS

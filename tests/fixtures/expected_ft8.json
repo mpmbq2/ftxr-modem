@@ -1,0 +1,187 @@
+{
+  "schema_version": 1,
+  "mode": "ft8",
+  "fixtures": [
+    {
+      "fixture_id": "210703_133430",
+      "filename": "210703_133430.wav",
+      "sha256": "9feb99c275770a6618538026da7decc6b09eb6cf63121e5168fa86dcdf00c2f5",
+      "utc": "133430",
+      "af_tol_hz": 3.0,
+      "dt_tol_sec": 0.1,
+      "snr_tol_db": 2,
+      "expected_decodes": [
+        {
+          "message": "W1FC F5BZB -08",
+          "snr_db": 16,
+          "dt_sec": 0.3,
+          "af_hz": 2571.0
+        },
+        {
+          "message": "WM3PEN EA6VQ -09",
+          "snr_db": 12,
+          "dt_sec": -0.1,
+          "af_hz": 2157.0
+        },
+        {
+          "message": "CQ F5RXL IN94",
+          "snr_db": -2,
+          "dt_sec": -0.8,
+          "af_hz": 1197.0
+        },
+        {
+          "message": "N1API HA6FQ -23",
+          "snr_db": -14,
+          "dt_sec": 0.3,
+          "af_hz": 2238.0
+        },
+        {
+          "message": "N1JFU EA6EE R-07",
+          "snr_db": -12,
+          "dt_sec": 0.3,
+          "af_hz": 641.0
+        },
+        {
+          "message": "A92EE F5PSR -14",
+          "snr_db": -7,
+          "dt_sec": 0.1,
+          "af_hz": 723.0
+        },
+        {
+          "message": "K1BZM EA3GP -09",
+          "snr_db": -3,
+          "dt_sec": -0.1,
+          "af_hz": 2695.0
+        },
+        {
+          "message": "W0RSJ EA3BMU RR73",
+          "snr_db": -16,
+          "dt_sec": 0.3,
+          "af_hz": 400.0
+        },
+        {
+          "message": "K1JT HA0DU KN07",
+          "snr_db": -14,
+          "dt_sec": 0.3,
+          "af_hz": 590.0
+        },
+        {
+          "message": "W1DIG SV9CVY -14",
+          "snr_db": -7,
+          "dt_sec": 0.4,
+          "af_hz": 2733.0
+        },
+        {
+          "message": "K1JT EA3AGB -15",
+          "snr_db": -16,
+          "dt_sec": 0.1,
+          "af_hz": 1648.0
+        },
+        {
+          "message": "XE2X HA2NP RR73",
+          "snr_db": -11,
+          "dt_sec": 0.2,
+          "af_hz": 2852.0
+        },
+        {
+          "message": "CQ EA2BFM IN83",
+          "snr_db": -17,
+          "dt_sec": 0.1,
+          "af_hz": 2280.0
+        },
+        {
+          "message": "K1BZM EA3CJ JN01",
+          "snr_db": -7,
+          "dt_sec": 0.2,
+          "af_hz": 2522.0
+        },
+        {
+          "message": "N1PJT HB9CQK -10",
+          "snr_db": -2,
+          "dt_sec": 0.2,
+          "af_hz": 466.0
+        },
+        {
+          "message": "N1API F2VX 73",
+          "snr_db": -17,
+          "dt_sec": 0.7,
+          "af_hz": 1513.0
+        },
+        {
+          "message": "K1BZM DK8NE -10",
+          "snr_db": -20,
+          "dt_sec": 0.5,
+          "af_hz": 244.0
+        },
+        {
+          "message": "K1JT HA5WA 73",
+          "snr_db": -20,
+          "dt_sec": 0.1,
+          "af_hz": 2039.0
+        },
+        {
+          "message": "KD2UGC F6GCP R-23",
+          "snr_db": -6,
+          "dt_sec": 0.4,
+          "af_hz": 472.0
+        }
+      ],
+      "three_stage_extra_decodes": [
+        {
+          "message": "WA2FZW DL5AXX RR73",
+          "snr_db": -9,
+          "dt_sec": -0.1,
+          "af_hz": 2546.0
+        },
+        {
+          "message": "CQ DX DL8YHR JO41",
+          "snr_db": -17,
+          "dt_sec": 0.2,
+          "af_hz": 2606.0
+        }
+      ]
+    },
+    {
+      "fixture_id": "191111_110200",
+      "filename": "191111_110200.wav",
+      "sha256": "bfd0bd61ac22b6d19a861039023fdf8e17397ae084277e63174b3ab3773c4022",
+      "utc": "110200",
+      "af_tol_hz": 2.0,
+      "dt_tol_sec": 0.1,
+      "snr_tol_db": 2,
+      "expected_decodes": [
+        {
+          "message": "CQ R7IW LN35",
+          "snr_db": -8,
+          "dt_sec": 0.9,
+          "af_hz": 1292.0
+        },
+        {
+          "message": "CQ DX R6WA LN32",
+          "snr_db": -11,
+          "dt_sec": 0.9,
+          "af_hz": 2097.0
+        },
+        {
+          "message": "CQ TA6CQ KN70",
+          "snr_db": -5,
+          "dt_sec": 0.7,
+          "af_hz": 683.0
+        },
+        {
+          "message": "OH3NIV ZS6S RR73",
+          "snr_db": -12,
+          "dt_sec": 1.0,
+          "af_hz": 990.0
+        },
+        {
+          "message": "CQ LZ1JZ KN22",
+          "snr_db": -14,
+          "dt_sec": 0.6,
+          "af_hz": 1030.0
+        }
+      ],
+      "three_stage_extra_decodes": []
+    }
+  ]
+}

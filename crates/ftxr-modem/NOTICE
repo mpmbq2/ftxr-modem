@@ -1,0 +1,68 @@
+ftxr-modem — Pure-Rust FT8 & FT4 Modem Engine
+=============================================
+
+Copyright (C) 2026 ftxr-modem Contributors
+Modified / ported to Rust in 2026 from WSJT-X v3.0.2.0 classic FT8/FT4 routines.
+Licensed under the GNU General Public License, Version 3 only (GPL-3.0-only).
+See LICENSE for the full license text.
+
+Upstream Attribution (WSJT-X)
+-----------------------------
+This software is derived from and ports the FT8, FT4, 77-bit message
+encoding/decoding, LDPC(174,91), and GFSK modulation/demodulation algorithms
+of WSJT-X (version 3.0.2.0, classic lib/ft8/, lib/ft4/, and lib/77bit/
+implementations):
+
+  Homepage:   https://wsjt.sourceforge.io/wsjtx.html
+  Repository: https://sourceforge.net/p/wsjt/wsjtx/ci/master/tree/
+
+Upstream WSJT-X copyright notice (per wsjtx/CMakeLists.txt and
+wsjtx/widgets/about.cpp):
+
+  Copyright (C) 2001-2026 by Joe Taylor (K1JT), Bill Somerville (G4WJS),
+  Steve Franke (K9AN), Nico Palermo (IV3NWV), Uwe Risse (DG2YCB),
+  Brian Moran (N9ADG), Roger Rehr (W3SZ), John Nelson (G4KLA),
+  Charlie Suckling (DL3WDG), Terrell Deppe (KJ5HST), and the WSJT
+  Development Group.
+
+  WSJT-X is licensed under the terms of Version 3 of the GNU General Public
+  License (GPL).
+
+GPLv3 Section 5 Modification & Clean-Room Exclusions Notice
+-----------------------------------------------------------
+`ftxr-core` and `ftxr-modem` are pure-Rust ports derived from WSJT-X's classic
+single-threaded FT8 (`lib/ft8/`), FT4 (`lib/ft4/`), and 77-bit (`lib/77bit/`)
+implementations, modified for thread-safe session-scoped execution, warm FFT
+reuse, parallel candidate decoding with deterministic subtraction ordering, and
+standalone CLI/IPC operation.
+
+Non-GPL / third-party routines present in upstream WSJT-X source files are
+explicitly excluded from this codebase and replaced with Rust standard library
+or clean-room pure-Rust implementations:
+  - Unused special-function code in `lib/ft8/ft8b.f90` (excluded entirely)
+  - Legacy Fortran index/shell sorting (`lib/indexx.f90`, `lib/shell.f90`),
+    replaced with Rust `std` slice sorting (`sort_by`, `sort_unstable_by`,
+    `select_nth_unstable_by`)
+  - Weighted polynomial fit (`lib/polyfit.f90`, `lib/determ.f90`), replaced
+    with clean-room 5x5 ordinary least-squares Gaussian elimination
+  - Boost C++ CRC wrapper (`lib/crc14.cpp`), implemented natively in pure Rust
+
+Trademark Notice
+----------------
+"WSJT", "WSJT-X", "MAP65", and "QMAP" are trademarks of the WSJT Development
+Team. `ftxr-modem` is an independent project based on WSJT-X code and is
+neither affiliated with nor endorsed by the WSJT Development Team.
+
+Test Fixture Provenance
+-----------------------
+- `tests/fixtures/210703_133430.wav` and `tests/fixtures/000000_000002.wav`:
+  From WSJT-X sample recordings, licensed under GPLv3.
+- `tests/fixtures/191111_110200.wav`:
+  Originally from `kgoba/ft8_lib` (MIT License, Copyright (c) Karlis Goba).
+
+Corresponding Source Offer (GPLv3 Section 6(d))
+-----------------------------------------------
+Machine-readable Corresponding Source for every official binary release of
+`ftxr-modem` is published alongside the release binaries at
+https://github.com/mpmbq2/ftxr-modem/releases (both as
+`ftxr-modem-<tag>-src.tar.gz` and at the corresponding git tag).

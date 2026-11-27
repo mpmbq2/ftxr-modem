@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ftxr-core",
+    "crates/ftxr-modem",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "GPL-3.0-only"
+repository = "https://github.com/mpmbq2/ftxr-modem"
+authors = ["ftxr-modem Contributors"]
+keywords = ["ft8", "ft4", "amateur-radio", "dsp", "modem"]
+categories = ["multimedia::audio", "science", "command-line-utilities"]
+
+[workspace.dependencies]
+ftxr-core = { path = "crates/ftxr-core", version = "0.1.0" }
+clap = { version = "4", features = ["derive", "env"] }
+crossbeam-channel = "0.5"
+libm = "0.2"
+num-complex = { version = "0.4", default-features = false, features = ["std"] }
+rayon = "1.10"
+realfft = "3"
+rustfft = "6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
